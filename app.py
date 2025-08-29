@@ -78,6 +78,31 @@ def analyze_emotion(text: str):
 
     return label_tb, icon, score, label_ai
 
+# -------------------- New Feature 1: Email Analysis --------------------
+def analyze_email(email_text: str):
+    if client:
+        try:
+            response = client.chat.completions.create(
+                model="llama3-8b-8192",
+                messages=[
+                    {"role": "system", "content": (
+                        "You are an assistant that analyzes emails. "
+                        "Detect the tone (formal/informal/neutral), "
+                        "politeness level (0-100), and emotional intent. "
+                        "Return output in this format:\n"
+                        "Tone: <tone>\n"
+                        "Politeness: <score>/100\n"
+                        "Emotional Intent: <intent>"
+                    )},
+                    {"role": "user", "content": f"Analyze this email: {email_text}"}
+                ],
+                max_tokens=120,
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            return f"Error: {e}"
+    return "API key not set."
+
 # -------------------- Gauge Meter --------------------
 def show_gauge(score: float):
     fig = go.Figure(
@@ -386,6 +411,19 @@ def empathy_page():
                 }, timeout=10)
             except Exception as e:
                 st.error(f"⚠ Could not save score: {e}")
+
+    st.divider()
+
+    # ---- New Feature: Email ----
+    st.subheader("📧 Email Tone Analysis")
+    email_text = st.text_area("Paste your email here…", height=150, key="email_text")
+    if st.button("🔍 Analyze Email"):
+        if email_text.strip():
+            result = analyze_email(email_text)
+            st.info(result)
+            speak(result)
+        else:
+            st.warning("Please paste an email first.")
 
     st.divider()
 
