@@ -13,7 +13,12 @@ except Exception:
 from dotenv import load_dotenv
 import os
 import requests
-
+# Extra imports for voice analysis
+import numpy as np
+import librosa
+import soundfile as sf
+import tempfile
+from pydub import AudioSegment
 # -------------------- Load OpenAI / GROQ API Key --------------------
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -35,6 +40,38 @@ def speak(text: str):
             """,
             height=0,
         )
+
+# -------------------- Extract Primary Emotion from AI --------------------
+EMOJI_MAP = {
+"Happy": "😃",
+"Happiness":"😃",
+"Joy":"😃",
+"Sad": "😢",
+"Angry": "😡",
+"Anger": "😡",
+"Frustration":"😖",
+"Anxiety":"😰",
+"Affection":"🥰",
+"Love":"❤️",
+"Surprise":"🤗",
+"Fear": "😨",
+"Neutral": "😐"
+}
+
+
+def extract_emotion(ai_text: str):
+    ai_text = (ai_text or "").lower()
+    if "primary emotion" in ai_text:
+        parts = ai_text.split("primary emotion")
+        if len(parts) > 1:
+            possible = parts[1]
+            for emo in EMOJI_MAP.keys():
+                if emo.lower() in possible:
+                    return emo
+    for emo in EMOJI_MAP.keys():
+        if emo.lower() in ai_text:
+            return emo
+    return "Neutral"
 
 # -------------------- Sentiment Analysis --------------------
 def analyze_emotion(text: str):
@@ -76,9 +113,13 @@ def analyze_emotion(text: str):
         except Exception as e:
             label_ai = f"Error: {e}"
 
-    return label_tb, icon, score, label_ai
+    # extract primary emotion + emoji
+    primary_emotion = extract_emotion(label_ai)
+    emoji = EMOJI_MAP.get(primary_emotion, "😐")
 
-# -------------------- New Feature 1: Email Analysis --------------------
+    return label_tb, icon, score, label_ai, primary_emotion, emoji 
+
+# -------------------- Email Analysis --------------------
 def analyze_email(email_text: str):
     if client:
         try:
@@ -104,24 +145,100 @@ def analyze_email(email_text: str):
     return "API key not set."
 
 # -------------------- Gauge Meter --------------------
-def show_gauge(score: float):
+def show_gauge_fig(score: float):
     fig = go.Figure(
         go.Indicator(
             mode="gauge+number",
             value=score,
             title={"text": "Sentiment Score"},
             gauge={
-                "axis": {"range": [-1, 1]},
+                "axis": {"range": [0, 5]},
                 "bar": {"color": "darkblue"},
                 "steps": [
-                    {"range": [-1, -0.3], "color": "red"},
-                    {"range": [-0.3, 0.3], "color": "lightgray"},
-                    {"range": [0.3, 1], "color": "green"},
+                    {"range": [0.0, 2.0], "color": "red"},
+                    {"range": [2.1, 3.9], "color": "lightgray"},
+                    {"range": [4.0, 5.0], "color": "green"},
                 ],
             },
         )
     )
-    st.plotly_chart(fig, use_container_width=True)
+    return fig  # <-- only change: return fig instead of plotting
+
+
+
+# -------------------- Voice Feature Extraction --------------------
+def analyze_voice_features(audio_data):
+    """
+    audio_data: speech_recognition.AudioData object
+    Returns dict with Pitch (Hz), Tempo (BPM), Energy, Voice Tremble hint.
+    """
+    try:
+        # Create temporary wav file from AudioData using pydub + bytes
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+            wav_bytes = audio_data.get_wav_data()
+            # pydub AudioSegment.from_file expects a buffer or file - use export path
+            # We'll write raw wav bytes to temp file then load via librosa
+            tmp.write(wav_bytes)
+            tmp.flush()
+            tmp_name = tmp.name
+
+        # Load audio with librosa
+        y, sr = librosa.load(tmp_name, sr=None)  # preserve native sample rate
+
+        features = {}
+
+        # Pitch estimation using piptrack
+        try:
+            pitches, magnitudes = librosa.piptrack(y=y, sr=sr)
+            # Select pitch values where magnitude above median
+            mags = magnitudes
+            threshold = np.median(mags[mags > 0]) if np.any(mags > 0) else 0.0
+            selected = pitches[magnitudes >= threshold]
+            selected = selected[selected > 0]
+            if len(selected) > 0:
+                pitch_median = float(np.median(selected))
+                features["Pitch (Hz)"] = round(pitch_median, 2)
+            else:
+                features["Pitch (Hz)"] = None
+        except Exception:
+            features["Pitch (Hz)"] = None
+
+        # Tempo / speed (BPM)
+        try:
+            tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+            features["Tempo (BPM)"] = round(float(tempo), 2)
+        except Exception:
+            features["Tempo (BPM)"] = None
+
+        # Energy (RMS)
+        try:
+            rms = librosa.feature.rms(y=y)
+            features["Energy"] = round(float(np.mean(rms)), 6)
+        except Exception:
+            features["Energy"] = None
+
+        # Tremble / jitter estimation: relative std dev of pitch
+        try:
+            if features.get("Pitch (Hz)") and features["Pitch (Hz)"] is not None:
+                # use selected pitch values computed earlier if available
+                if 'selected' in locals() and len(selected) > 1:
+                    jitter = float(np.std(selected) / np.mean(selected))
+                    features["Jitter"] = round(jitter, 4)
+                    features["Voice Tremble"] = "Yes (Possible Anxiety)" if jitter > 0.18 else "No"
+                else:
+                    features["Jitter"] = None
+                    features["Voice Tremble"] = "N/A"
+            else:
+                features["Jitter"] = None
+                features["Voice Tremble"] = "N/A"
+        except Exception:
+            features["Jitter"] = None
+            features["Voice Tremble"] = "N/A"
+
+        return features
+
+    except Exception as e:
+        return {"error": str(e)}
 
 # -------------------- Speech Recognition --------------------
 def recognize_speech():
@@ -132,9 +249,58 @@ def recognize_speech():
             r.adjust_for_ambient_noise(source, duration=1)
             st.info("🎤 Listening… Speak now.")
             audio = r.listen(source, timeout=5, phrase_time_limit=8)
-        return r.recognize_google(audio)
-    except Exception:
+        # Text from Google
+        try:
+            text = r.recognize_google(audio)
+        except Exception:
+            text = None
+
+        # NEW: Voice tone analysis
+        features = analyze_voice_features(audio)
+        st.subheader("🎶 Voice Tone Analysis")
+        if isinstance(features, dict) and "error" in features:
+            st.error(f"Voice analysis error: {features['error']}")
+        else:
+            for k, v in features.items():
+                st.write(f"**{k}:** {v}")
+
+            # Friendly interpretation mapping (simple heuristics)
+            interpretation = []
+            try:
+                pitch = features.get("Pitch (Hz)")
+                tempo = features.get("Tempo (BPM)")
+                tremble = features.get("Voice Tremble")
+                if pitch:
+                    if pitch < 140:
+                        interpretation.append("Low pitch — may sound calm/serious.")
+                    elif pitch > 220:
+                        interpretation.append("High pitch — may indicate stress or excitement.")
+                    else:
+                        interpretation.append("Medium pitch — neutral.")
+                if tempo:
+                    if tempo < 80:
+                        interpretation.append("Slow speech — may indicate sadness or tiredness.")
+                    elif tempo > 150:
+                        interpretation.append("Fast speech — may indicate excitement or nervousness.")
+                    else:
+                        interpretation.append("Moderate tempo.")
+                if tremble == "Yes (Possible Anxiety)":
+                    interpretation.append("Tremble detected — possible anxiety/hesitation.")
+                elif tremble == "No":
+                    interpretation.append("No tremble detected.")
+            except Exception:
+                pass
+
+            if interpretation:
+                st.markdown("**Interpretation:**")
+                for it in interpretation:
+                    st.write("- " + it)
+
+        return text
+    except Exception as e:
+        st.error(f"⚠ Microphone / recognition error: {e}")
         return None
+
 
 # -------------------- Page Config + CSS --------------------
 st.set_page_config(page_title="Empathy Meter", page_icon="🎭", layout="centered")
@@ -144,6 +310,12 @@ st.markdown(
 <link href="https://fonts.googleapis.com/css2?family=Bubblegum+Sans&display=swap" rel="stylesheet">
 
 <style>
+iframe[title="st.iframe"] {
+    margin: 0 !important;
+    padding: 0 !important;
+    display: block !important;
+    height: 0 !important;
+}
 /* Background */
 .stApp {
   background: linear-gradient(to right, #093637, #44A08D);
@@ -235,7 +407,10 @@ div, p, span, label {
   50% { transform: translateY(-12px); opacity: 1; }
   100% { transform: translateY(0); opacity: 0.9; }
 }
-.floater { position: fixed; font-size: 35px; opacity: .7; animation: floatY 8s infinite; }
+
+
+
+.floater { position: fixed; font-size: 50px; opacity: .7; animation: floatY 8s infinite; animation:pulseGlow 2s infinite; }
 .f1 { top: 8%; left: 8%; animation-delay: 0s;  }
 .f2 { top: 30%; right: 10%; animation-delay: .6s; }
 .f3 { bottom: 10%; left: 12%; animation-delay: 1.2s; }
@@ -258,7 +433,7 @@ div, p, span, label {
   opacity: .95; margin-bottom: 18px;
 }
 </style>
-<div class="floater f1">✨</div>
+<div class="floater f1">💫</div>
 <div class="floater f2">🫡</div>
 <div class="floater f3">🥶</div>
 <div class="floater f4">🫣</div>
@@ -274,6 +449,35 @@ if "username" not in st.session_state:
     st.session_state.username = None
 if "page" not in st.session_state:
     st.session_state.page = "login"
+
+# -------------------- Dynamic background helper --------------------
+def set_dynamic_background(emotion_label: str):
+    """Change the main app background based on emotion_label.
+    emotion_label expected values: 'Positive', 'Negative', 'Neutral', or others (e.g. 'Anger')
+    """
+    # mapping
+    if not emotion_label:
+        grad = "linear-gradient(to right, #093637, #44A08D)"
+    else:
+        el = emotion_label.lower()
+        if "happy" in el or "positive" in el or "joy" in el:
+            grad = "linear-gradient(90deg, #fff4b1, #ffd166)"  # yellow
+        elif "sad" in el or "negative" in el or "sadness" in el:
+            grad = "linear-gradient(90deg, #a1c4fd, #c2e9fb)"  # blue
+        elif "angry" in el or "anger" in el or "frustr" in el:
+            grad = "linear-gradient(90deg, #ff9a9e, #ff6a6a)"  # red/pink
+        else:
+            grad = "linear-gradient(to right, #093637, #44A08D)"  # default
+
+    js = f"""
+    <script>
+    try {{
+        const el = document.querySelector('.stApp');
+        if(el) el.style.background = '{grad}';
+    }} catch(e){{console.warn(e)}}
+    </script>
+    """
+    components.html(js, height=0)
 
 # -------------------- Pages --------------------
 def login_page():
@@ -350,7 +554,32 @@ def signup_page():
     if st.button("🔙 Back to Login"):
         st.session_state.page = "login"
         st.rerun()
+def display_combined(score: float, emoji: str, ai_reason: str, tb_label: str):
+    col1, col2, col3 = st.columns([1, 0.6, 1])
 
+    # Gauge
+    with col1:
+        fig = show_gauge_fig(score)
+        st.plotly_chart(fig, use_container_width=True)
+
+    # Emoji large
+    with col2:
+        st.markdown(f"<div style='font-size:64px; text-align:center'>{emoji}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='text-align:center; font-weight:700'>{tb_label}</div>", unsafe_allow_html=True)
+
+    # Reason bubble
+    with col3:
+        st.markdown('<div class="reason-bubble" style="padding:10px; background:rgba(255,255,255,0.1); border-radius:12px;">', unsafe_allow_html=True)
+        short = ai_reason if len(ai_reason) < 800 else ai_reason[:800] + '...'
+        st.write(short)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # limit ai_reason length for UI
+        short = ai_reason if len(ai_reason) < 800 else ai_reason[:800] + '...'
+        st.write(short)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+# --------------------Empathy Page --------------------
 def empathy_page():
     components.html("<script>document.body.classList.remove('page-login');</script>", height=0)
 
@@ -365,11 +594,12 @@ def empathy_page():
         if text_in.strip():
             st.success(f"📝 You wrote: {text_in}")
             speak(f"You wrote: {text_in}")
-            label_tb, icon, score, label_ai = analyze_emotion(text_in)
-            st.info(f"{icon} Emotion Detector: {label_tb}")
-            st.info(f"🤖 Astor: {label_ai}")
-            speak(f"This sounds {label_tb}.")
-            show_gauge(score)
+            label_tb, icon, score, label_ai, primary_emotion, emoji = analyze_emotion(text_in)
+
+            # dynamic background and display based on tb label + ai hint
+            set_dynamic_background(primary_emotion)
+            display_combined(score, emoji, label_ai, primary_emotion)
+            speak(f"Primary emotion detected: {primary_emotion}.")
 
             # Save to backend
             try:
@@ -396,11 +626,15 @@ def empathy_page():
         else:
             st.success(f"🗣 You said: {heard}")
             speak(f"You said: {heard}")
-            label_tb, icon, score, label_ai = analyze_emotion(heard)
-            st.info(f"{icon} TextBlob: {label_tb}")
-            st.info(f"🤖 Astor: {label_ai}")
+            label_tb, icon, score, label_ai, primary_emotion, emoji = analyze_emotion(heard or "")
+
+            # dynamic background
+            set_dynamic_background(label_tb)
+
+            # combined display
+            display_combined(score, icon, label_ai, label_tb)
+
             speak(f"This sounds {label_tb}.")
-            show_gauge(score)
 
             # Save to backend
             try:
@@ -414,7 +648,7 @@ def empathy_page():
 
     st.divider()
 
-    # ---- New Feature: Email ----
+        # ---- Email ----
     st.subheader("📧 Email Tone Analysis")
     email_text = st.text_area("Paste your email here…", height=150, key="email_text")
     if st.button("🔍 Analyze Email"):
@@ -425,6 +659,18 @@ def empathy_page():
         else:
             st.warning("Please paste an email first.")
 
+            # ✅ Save Email Analysis to backend
+            try:
+                requests.post(f"{API_URL}/submit_email_analysis", json={
+                    "username": st.session_state.username,
+                    "email_text": email_text,
+                    "analysis": result
+                }, timeout=10)
+            except Exception as e:
+                st.error(f"⚠ Could not save email analysis: {e}")
+
+            else:
+                st.warning("Please paste an email first.")
     st.divider()
 
     # Optional: Score History viewer (keeps UI as-is)
@@ -439,7 +685,7 @@ def empathy_page():
                     st.caption("No scores yet.")
                 else:
                     for s in scores:
-                        st.write(f"📝 *{s['text']}* → *{s['score']:.3f}*  (at {s['timestamp']})")
+                        st.write(f"📝 {s['text']} → {s['score']:.3f}  (at {s['timestamp']})")
                     # Plot line chart of scores
                     values = [item["score"] for item in reversed(scores)]
                     fig = go.Figure([go.Scatter(y=values, mode="lines+markers")])
@@ -451,6 +697,8 @@ def empathy_page():
             st.error(f"⚠ Could not fetch scores: {e}")
 
     if st.button("🔙 Logout"):
+        # Reset background to default on logout
+        set_dynamic_background(None)
         st.session_state.logged_in = False
         st.session_state.page = "login"
         st.session_state.username = None
