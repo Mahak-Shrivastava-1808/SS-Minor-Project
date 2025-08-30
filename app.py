@@ -481,7 +481,7 @@ def set_dynamic_background(emotion_label: str):
 
 # -------------------- Pages --------------------
 def login_page():
-    components.html("<script>document.body.classList.add('page-login');</script>", height=0)
+    
 
     st.markdown('<div class="glass">🙂‍↔ Welcome to Empathy Meter</div>', unsafe_allow_html=True)
     st.markdown('<div class="title">🔐 Login</div>', unsafe_allow_html=True)
@@ -521,7 +521,6 @@ def login_page():
             st.rerun()
 
 def signup_page():
-    components.html("<script>document.body.classList.remove('page-login');</script>", height=0)
 
     st.markdown('<div class="glass">📝 Create Account</div>', unsafe_allow_html=True)
     st.markdown('<div class="title">✨ Sign Up</div>', unsafe_allow_html=True)
