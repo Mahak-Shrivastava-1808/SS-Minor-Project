@@ -1,4 +1,3 @@
-# frontend/app.py
 # app.py (Streamlit frontend)
 import streamlit as st
 import speech_recognition as sr
@@ -11,16 +10,6 @@ try:
 except Exception:
     Groq = None
 from dotenv import load_dotenv
-# frontend/app.py
-# Empathy Meter (Streamlit frontend)
-# -----------------------------------------------------------------------------
-# Key changes in this version
-# 1) Gauge now renders with a transparent background (so only the gauge is visible)
-# 2) No red delta ("-3") is shown — mode is strictly "gauge+number"
-# 3) TextBlob polarity (-1..1) is normalized to a 0..5 score for the gauge
-# 4) Fixed comparison bug in sentiment labeling (2 <= score < 3.5)
-# 5) Kept your overall layout and styling; minor cleanups for reliability
-# -----------------------------------------------------------------------------
 
 import os
 import tempfile
@@ -41,8 +30,8 @@ except Exception:
 
 # Optional audio analysis libs
 import librosa
-import soundfile as sf  # kept because it was in your imports
-from pydub import AudioSegment  # kept because it was in your imports
+import soundfile as sf 
+from pydub import AudioSegment 
 
 # -------------------- Load OpenAI / GROQ API Key --------------------
 load_dotenv()
@@ -50,7 +39,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 client = Groq(api_key=GROQ_API_KEY) if (Groq is not None and GROQ_API_KEY) else None
 
 # Backend URL (change if your backend runs elsewhere)
-API_URL = os.getenv("EMPATHY_API_URL", "http://127.0.0.1:8000")
+API_URL = os.getenv("EMPATHY_API_URL", "http://127.0.0.1:8000/docs")
 
 # -------------------- Browser-based Speak --------------------
 def speak(text: str):
@@ -82,7 +71,6 @@ EMOJI_MAP = {
     "Fear": "😨",
     "Neutral": "😐",
 }
-
 
 def extract_emotion(ai_text: str):
     ai_text = (ai_text or "").lower()
@@ -191,7 +179,7 @@ def show_gauge_fig(score: float):
     s = max(0.0, min(5.0, float(score)))
     fig = go.Figure(
         go.Indicator(
-            mode="gauge+number",  # no delta here
+            mode="gauge+number",  
             value=s,
             number={"font": {"size": 48}},
             title={"text": "Sentiment Score", "font": {"size": 16}},
@@ -305,7 +293,7 @@ def recognize_speech():
         except Exception:
             text = None
 
-        # NEW: Voice tone analysis
+        # Voice tone analysis
         features = analyze_voice_features(audio)
         st.subheader("🎶 Voice Tone Analysis")
         if isinstance(features, dict) and "error" in features:
@@ -314,7 +302,7 @@ def recognize_speech():
             for k, v in features.items():
                 st.write(f"{k}: **{v}")
 
-            # Friendly interpretation mapping (simple heuristics)
+            # Friendly interpretation mapping 
             interpretation = []
             try:
                 pitch = features.get("Pitch (Hz)")
@@ -633,15 +621,9 @@ def display_combined(score: float, emoji: str, ai_reason: str, tb_label: str):
         st.write(short)
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # duplicate kept intentionally to avoid disturbing other logic
-        short = ai_reason if len(ai_reason) < 800 else ai_reason[:800] + '...'
-        st.write(short)
-        st.markdown('</div>', unsafe_allow_html=True)
-
 # -------------------- Empathy Page --------------------
 
 def empathy_page():
-    # Remove auth classes so main page is full-width
     components.html("<script>document.body.className='';</script>", height=0)
 
     st.markdown('<div class="glass">🎭 Empathy Meter</div>', unsafe_allow_html=True)
@@ -718,7 +700,7 @@ def empathy_page():
             st.info(result)
             speak(result)
 
-            # ✅ Save Email Analysis to backend
+            #  Save Email Analysis to backend
             try:
                 requests.post(
                     f"{API_URL}/submit_email_analysis",

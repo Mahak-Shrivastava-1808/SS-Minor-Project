@@ -79,15 +79,25 @@ class EmailFlexible(BaseModel):
     analysis: str | None = None
 
 # ---------------- App init ----------------
-app = FastAPI(title="Empathy Meter Backend")
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-# Allow CORS for Streamlit frontend
+app = FastAPI()
+
+# ✅ CORS Middleware add karo
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["*"],      # kis origin se request allow hai → abhi sab allow
+    allow_credentials=True,
+    allow_methods=["*"],      # GET, POST, PUT, DELETE sab allow
+    allow_headers=["*"],      # saare headers allow
 )
+
+# Example route
+@app.get("/")
+def home():
+    return {"msg": "Backend is running 🚀"}
+
 
 # ---------------- Dependency ----------------
 def get_db():
