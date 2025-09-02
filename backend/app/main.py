@@ -7,6 +7,9 @@ from passlib.hash import bcrypt
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
 import re
+import joblib
+import numpy as np
+
 
 # ---------------- Database setup ----------------
 DATABASE_URL = "sqlite:///./test.db"
@@ -16,7 +19,7 @@ Base = declarative_base()
 
 # ---------------- User model ----------------
 class User(Base):
-    __tablename__ = "users"
+    __tablename__ = "users" 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True)
     password = Column(String)
@@ -25,7 +28,7 @@ class User(Base):
 
 # ---------------- EmpathyScore model ----------------
 class EmpathyScore(Base):
-    __tablename__ = "scores"
+    __tablename__ = "empathy_scores" 
     id = Column(Integer, primary_key=True, index=True)
     text = Column(String)
     score = Column(Float)
@@ -35,7 +38,7 @@ class EmpathyScore(Base):
 
 # ---------------- EmailAnalysis model ----------------
 class EmailAnalysis(Base):
-    __tablename__ ="emails"
+    __tablename__ = "email_analysis" 
     id = Column(Integer, primary_key=True, index=True)
     email_text = Column(Text)
     tone = Column(String)
@@ -98,6 +101,18 @@ app.add_middleware(
 def home():
     return {"msg": "Backend is running 🚀"}
 
+# ---------------- Load trained ML model ----------------
+import pathlib, joblib
+
+HERE = pathlib.Path(__file__).parent  # yeh backend/app folder ko point karega
+
+# ✅ Correct paths
+MODEL_PATH = HERE.parent / "ml_model" / "emotion_model.pkl"
+VECTORIZER_PATH = HERE.parent / "ml_model" / "vectorizer.pkl"
+
+# Load model + vectorizer
+model = joblib.load(MODEL_PATH)
+vectorizer = joblib.load(VECTORIZER_PATH)
 
 # ---------------- Dependency ----------------
 def get_db():
@@ -276,3 +291,30 @@ def all_emails(db: Session = Depends(get_db)):
         }
         for e in emails
     ]
+
+# ---------------- Predict emotion endpoint ----------------
+class PredictRequest(BaseModel):
+    text: str
+
+@app.post("/predict")
+def predict_emotion(req: PredictRequest):
+    if not req.text or len(req.text.strip()) == 0:
+        raise HTTPException(status_code=400, detail="Text is required for prediction")
+
+    try:
+        # Vectorize input
+        X = vectorizer.transform([req.text])
+        pred = model.predict(X)[0]
+        probs = model.predict_proba(X)[0]
+        prob_dict = {cls: float(p) for cls, p in zip(model.classes_, probs)}
+
+        # Confidence score
+        score = round(float(np.max(probs) * 5), 2)
+
+        return {
+            "emotion": pred,
+            "score": score,
+            "probs": prob_dict
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

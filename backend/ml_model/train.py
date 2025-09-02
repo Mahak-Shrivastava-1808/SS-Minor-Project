@@ -42,7 +42,7 @@ try:
     print("\n📊 Classification Report:\n", classification_report(y_test, y_pred))
 
     # Save model + vectorizer
-    joblib.dump(model, HERE / "empathy_model.pkl")
+    joblib.dump(model, HERE / "emotion_model.pkl")
     joblib.dump(vectorizer, HERE / "vectorizer.pkl")
     print("✅ Model and vectorizer saved!")
 

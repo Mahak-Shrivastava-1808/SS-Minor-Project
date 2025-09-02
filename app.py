@@ -21,6 +21,8 @@ import plotly.graph_objects as go
 import speech_recognition as sr
 from textblob import TextBlob
 from dotenv import load_dotenv
+import re
+
 
 # Optional Groq client (safe import)
 try:
@@ -39,7 +41,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 client = Groq(api_key=GROQ_API_KEY) if (Groq is not None and GROQ_API_KEY) else None
 
 # Backend URL (change if your backend runs elsewhere)
-API_URL = os.getenv("EMPATHY_API_URL", "http://127.0.0.1:8000")
+API_URL = "http://127.0.0.1:8000"
 
 # -------------------- Browser-based Speak --------------------
 def speak(text: str):
@@ -104,17 +106,44 @@ def _normalize_to_0_5(polarity: float) -> float:
 
 
 def analyze_emotion(text: str):
-    blob = TextBlob(text or "")
-    polarity = float(blob.sentiment.polarity)  # -1..1
-    score = _normalize_to_0_5(polarity)        # 0..5 (for gauge)
+    """
+    Run text through backend /predict first.
+    Fallback: TextBlob + optional Groq API.
+    """
+    # Try backend first
+    try:
+        res = requests.post(f"{API_URL}/predict", json={"text": text}, timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            primary_emotion = data.get("emotion", "Neutral")
+            score = float(data.get("score", 2.5))
+            # probs = data.get("probs", {})
+        
+            emoji = EMOJI_MAP.get(primary_emotion, "🙂")
+            tb_label = primary_emotion  
+        
+            # 👇 Yahan pe dono variables define karo
+            backend_label = f"Backend model detected {primary_emotion} with score {score}\n"
+            ai_reason = f"AI analysis: Emotion {primary_emotion} detected confidently."
+        
+            return backend_label, emoji, score, ai_reason, tb_label, primary_emotion
 
-    # Labels based on the normalized 0..5 score
+        else:
+            st.warning(f"⚠ Backend error: {res.text}")
+    except Exception as e:
+        st.warning(f"⚠ Could not connect to backend: {e}")
+
+    # -------------------- Fallback (TextBlob + Groq) --------------------
+    blob = TextBlob(text or "")
+    polarity = float(blob.sentiment.polarity)
+    score = round(((polarity + 1) / 2) * 5, 2)
+
     if score > 4.0:
-        label_tb, icon = "Positive", "🙂"
+        tb_label, icon = "Positive", "🙂"
     elif score < 2.0:
-        label_tb, icon = "Negative", "😟"
-    else:  # 2.0 <= score < 4.0
-        label_tb, icon = "Neutral", "😐"
+        tb_label, icon = "Negative", "😟"
+    else:
+        tb_label, icon = "Neutral", "😐"
 
     label_ai = "GROQ not configured or API key missing."
     if client:
@@ -145,11 +174,10 @@ def analyze_emotion(text: str):
         except Exception as e:
             label_ai = f"Error: {e}"
 
-    # extract primary emotion + emoji
     primary_emotion = extract_emotion(label_ai)
     emoji = EMOJI_MAP.get(primary_emotion, "😐")
 
-    return label_tb, icon, score, label_ai, primary_emotion, emoji
+    return tb_label, icon, score, label_ai, primary_emotion, emoji
 
 # -------------------- Email Analysis --------------------
 
@@ -566,7 +594,6 @@ def set_dynamic_background(emotion_label: str):
 
 def login_page():
     # Ensure auth-page width constraints only here
-    # components.html("<script>document.body.classList.add='page-auth page-login';</script>", height=0)
 
     st.markdown('<div class="glass">🙂‍↔ Welcome to Empathy Meter</div>', unsafe_allow_html=True)
     st.markdown('<div class="title">🔐 Login</div>', unsafe_allow_html=True)
@@ -607,7 +634,6 @@ def login_page():
 
 def signup_page():
     # Ensure auth-page width constraints only here
-    # components.html("<script>document.body.className='page-auth page-signup';</script>", height=0)
 
     st.markdown('<div class="glass">📝 Create Account</div>', unsafe_allow_html=True)
     st.markdown('<div class="title">✨ Sign Up</div>', unsafe_allow_html=True)
@@ -650,44 +676,74 @@ def signup_page():
             st.session_state.page = "login"
             st.rerun()
 
-def display_combined(score: float, emoji: str, ai_reason: str, tb_label: str):
-    col1, col2, col3 = st.columns([1, 0.6, 1])
+def display_combined(score: float, emoji: str, backend_label: str, ai_reason: str, tb_label: str):
+    # Score Card
+    st.markdown(f"""
+        <div style="background:linear-gradient(to right, #093638, #44A08E); padding:15px; border-radius:12px; 
+            margin-bottom:15px; border-left:6px solid #4CAF50;">
+            <h4 style="margin:0; color:#4CAF50;">Score</h4>
+            <p style="margin:5px 0; font-size:18px; font-weight:600; color:#333;">{score}</p>
+        </div>
+    """, unsafe_allow_html=True)
 
-    # Gauge
+    # Backend Response Card
+    st.markdown(f"""
+        <div style="background:linear-gradient(to right, #093638, #44A08E); padding:15px; border-radius:12px; 
+            margin-bottom:15px; border-left:6px solid #2196F3;">
+            <h4 style="margin:0; color:#2196F3;">Backend Detected Emotion</h4>
+            <p style="margin:5px 0; font-size:18px; font-weight:600; color:#333;">{backend_label}</p>
+        </div>
+    """, unsafe_allow_html=True)
+
+        # AI Reason Card
+    content = (
+        ai_reason[:800] + "..."
+        if isinstance(ai_reason, str) and len(ai_reason) > 800
+        else str(ai_reason or "")
+    )
+    st.markdown(
+        f"""
+        <div style="background:linear-gradient(to right, #093638, #44A08E); padding:15px; border-radius:12px;
+                    border-left:6px solid #FF9800; font-size:15px; 
+                    color:#333; line-height:1.5; max-height:400px; overflow:auto;">
+            <h4 style="margin:0; color:#FF9800;">AI Analysis</h4>
+            <p style="margin:5px 0;">{content}</p>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # Layout → 2 columns
+    col1, col2 = st.columns([1.5, 1.5])
+
+    # Gauge in col1 inside card
     with col1:
-        fig = show_gauge_fig(score)
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.markdown("""
+        <div style="background:linear-gradient(to right, #093638, #44A08E); padding:15px; border-radius:12px; 
+                    margin-top:15px;   
+                    margin-bottom:1px; 
+                    border-left:6px solid #9C27B8;">
+            <h4 style="margin:0 0 8px 0; color:#9C27B8;">🎯 Emotion Score Gauge</h4>
+        """, unsafe_allow_html=True)
 
-    # Emoji large
+    # Gauge chart - reduced size
+    fig = show_gauge_fig(score)
+    fig.update_layout(height=250, width=250)  # 👈 size control
+    st.plotly_chart(fig, use_container_width=False, config={"displayModeBar": False})
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # Emoji + TextBlob label in col2 inside card
     with col2:
-        st.markdown(f"<div style='font-size:64px; text-align:center'>{emoji}</div>", unsafe_allow_html=True)
-        st.markdown(f"<div style='text-align:center; font-weight:700'>{tb_label}</div>", unsafe_allow_html=True)
-
-    # Reason bubble
-    with col3:
-        content = (
-            ai_reason[:800] + "..."
-            if isinstance(ai_reason, str) and len(ai_reason) > 800
-            else str(ai_reason or "")
-        )
-
-        st.markdown(
-            f"""
-            <div class="reason-bubble" style="
-                padding:10px;
-                background:rgba(255,255,255,0.1);
-                border-radius:12px;
-                white-space:pre-wrap;     /* preserve newlines */
-                line-height:1.5;
-                overflow:auto;            /* add scroll if long */
-                max-height:400px;
-                text-align: left;         /* force left alignment */
-            ">
-                {content}
+        st.markdown(f"""
+            <div style="background:linear-gradient(to right, #093638, #44A08E); padding:15px; border-radius:12px; 
+                        margin-bottom:15px; border-left:6px solid #E91E63; text-align:center;">
+                <h4 style="margin:0; color:#E91E63;">TextBlob Detection</h4>
+                <div style="font-size:64px; margin:10px 0;">{emoji}</div>
+                <p style="font-weight:700; font-size:18px; margin:0; color:#333;">{tb_label}</p>
             </div>
-            """,
-            unsafe_allow_html=True
-        )
+        """, unsafe_allow_html=True)
+
 # -------------------- Empathy Page --------------------
 
 def empathy_page():
@@ -704,11 +760,11 @@ def empathy_page():
         if text_in.strip():
             st.success(f"📝 You wrote: {text_in}")
             speak(f"You wrote: {text_in}")
-            label_tb, icon, score, label_ai, primary_emotion, emoji = analyze_emotion(text_in)
+            backend_label, emoji, score, ai_reason, tb_label, primary_emotion = analyze_emotion(text_in)
 
             # dynamic background and display based on tb label + ai hint
             set_dynamic_background(primary_emotion)
-            display_combined(score, emoji, label_ai, primary_emotion)
+            display_combined(score, emoji, backend_label, ai_reason, tb_label)
             speak(f"Primary emotion detected: {primary_emotion}.")
 
             # Save to backend
@@ -736,15 +792,15 @@ def empathy_page():
         else:
             st.success(f"🗣 You said: {heard}")
             speak(f"You said: {heard}")
-            label_tb, icon, score, label_ai, primary_emotion, emoji = analyze_emotion(heard or "")
+            backend_label, emoji, score, ai_reason, tb_label, primary_emotion = analyze_emotion(heard or "")
 
             # dynamic background
-            set_dynamic_background(label_tb)
+            set_dynamic_background(primary_emotion)
 
             # combined display
-            display_combined(score, icon, label_ai, label_tb)
+            display_combined(score, emoji, backend_label, ai_reason, tb_label)
 
-            speak(f"This sounds {label_tb}.")
+            speak(f"This sounds {tb_label}.")
 
             # Save to backend
             try:
@@ -789,7 +845,7 @@ def empathy_page():
     #Score History viewer (keeps UI as-is)
     with st.expander("📊 View Score History"):
         if st.button("Refresh History"):
-            st.experimental_rerun()
+            st.rerun()
         try:
             res = requests.get(f"{API_URL}/user_scores/{st.session_state.username}", timeout=10)
             if res.status_code == 200:
