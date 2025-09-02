@@ -8,7 +8,7 @@ from pathlib import Path
 
 # 📂 Path setup
 HERE = Path(__file__).parent
-DATASET = HERE / "train_data.csv"
+DATASET = HERE / "train_data.csv"   # ✅ Corrected file name
 
 try:
     print("📂 Script folder :", HERE)
@@ -19,7 +19,7 @@ try:
     # Load dataset
     df = pd.read_csv(DATASET)
     print("✅ Dataset loaded:", DATASET)
-    print("➡️ Columns:", df.columns.tolist())
+    print("➡ Columns:", df.columns.tolist())
 
     # ✅ Use correct columns
     X_text = df["SENTENCES"].astype(str)
@@ -47,4 +47,4 @@ try:
     print("✅ Model and vectorizer saved!")
 
 except Exception as e:
-    print("❌ Error loading dataset:", e)
+    print("❌ Error:", e)

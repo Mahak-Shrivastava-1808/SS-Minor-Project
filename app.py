@@ -39,11 +39,17 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 client = Groq(api_key=GROQ_API_KEY) if (Groq is not None and GROQ_API_KEY) else None
 
 # Backend URL (change if your backend runs elsewhere)
-API_URL = os.getenv("EMPATHY_API_URL", "http://127.0.0.1:8000/docs")
+API_URL = os.getenv("EMPATHY_API_URL", "http://127.0.0.1:8000")
 
 # -------------------- Browser-based Speak --------------------
 def speak(text: str):
     if text and isinstance(text, str):
+        # prevent repetition
+        last_spoken = st.session_state.get("last_spoken", "")
+        if text.strip() == last_spoken.strip():
+            return  # don't repeat
+        st.session_state.last_spoken = text  # update memory
+
         components.html(
             f"""
             <script>
@@ -61,14 +67,16 @@ EMOJI_MAP = {
     "Happiness": "😃",
     "Joy": "😃",
     "Sad": "😢",
+    "Melancholy":"😢",
+    "Shock":"😮",
     "Angry": "😡",
     "Anger": "😡",
+    "Fear": "😨",
+    "Surprise": "🤗",
     "Frustration": "😖",
     "Anxiety": "😰",
     "Affection": "🥰",
     "Love": "❤",
-    "Surprise": "🤗",
-    "Fear": "😨",
     "Neutral": "😐",
 }
 
@@ -112,7 +120,7 @@ def analyze_emotion(text: str):
     if client:
         try:
             response = client.chat.completions.create(
-                model="llama3-8b-8192",
+                model="llama-3.1-8b-instant",
                 messages=[
                     {
                         "role": "system",
@@ -149,7 +157,7 @@ def analyze_email(email_text: str):
     if client:
         try:
             response = client.chat.completions.create(
-                model="llama3-8b-8192",
+                model="llama-3.1-8b-instant",
                 messages=[
                     {
                         "role": "system",
@@ -286,7 +294,7 @@ def recognize_speech():
             st.info("🎤 Adjusting for background noise…")
             r.adjust_for_ambient_noise(source, duration=1)
             st.info("🎤 Listening… Speak now.")
-            audio = r.listen(source, timeout=5, phrase_time_limit=8)
+            audio = r.listen(source, timeout=20, phrase_time_limit=59)
         # Text from Google
         try:
             text = r.recognize_google(audio)
@@ -370,7 +378,6 @@ body.page-auth main .block-container{
   max-width: 520px;                  /* nice, compact card width */
   padding: 0 !important;
 }
-body.page-login, body.page-signup { overflow: hidden; } /* no scroll on auth pages */
 
 /* Global text fix */
 .stTextInput label,
@@ -484,6 +491,49 @@ if "username" not in st.session_state:
     st.session_state.username = None
 if "page" not in st.session_state:
     st.session_state.page = "login"
+if "last_spoken" not in st.session_state:
+    st.session_state.last_spoken = ""
+
+# -------------------- Scroll lock helpers --------------------
+def _lock_scroll_css():
+    st.markdown(
+        """
+        <style>
+        /* stable selectors only — do NOT rely on ephemeral emotion-cache classes */
+        html, body, [data-testid="stAppViewContainer"], main[role="main"], .block-container {
+            height: 100vh !important;
+            overflow: hidden !important;
+            overscroll-behavior: none !important;
+        }
+        /* hide scrollbars for WebKit browsers */
+        html::-webkit-scrollbar, body::-webkit-scrollbar, [data-testid="stAppViewContainer"]::-webkit-scrollbar {
+            display: none;
+            width: 0;
+            height: 0;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+def _unlock_scroll_css():
+    st.markdown(
+        """
+        <style>
+        html, body, [data-testid="stAppViewContainer"], main[role="main"], .block-container {
+
+        }
+
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+if (not st.session_state.get("logged_in", False)) and st.session_state.get("page", "login") == "login":
+    _lock_scroll_css()
+else:
+    _unlock_scroll_css()
+# -------------------- End scroll helpers --------------------
 
 # -------------------- Dynamic background helper --------------------
 
@@ -516,7 +566,7 @@ def set_dynamic_background(emotion_label: str):
 
 def login_page():
     # Ensure auth-page width constraints only here
-    components.html("<script>document.body.className='page-auth page-login';</script>", height=0)
+    # components.html("<script>document.body.classList.add='page-auth page-login';</script>", height=0)
 
     st.markdown('<div class="glass">🙂‍↔ Welcome to Empathy Meter</div>', unsafe_allow_html=True)
     st.markdown('<div class="title">🔐 Login</div>', unsafe_allow_html=True)
@@ -557,7 +607,7 @@ def login_page():
 
 def signup_page():
     # Ensure auth-page width constraints only here
-    components.html("<script>document.body.className='page-auth page-signup';</script>", height=0)
+    # components.html("<script>document.body.className='page-auth page-signup';</script>", height=0)
 
     st.markdown('<div class="glass">📝 Create Account</div>', unsafe_allow_html=True)
     st.markdown('<div class="title">✨ Sign Up</div>', unsafe_allow_html=True)
@@ -600,7 +650,6 @@ def signup_page():
             st.session_state.page = "login"
             st.rerun()
 
-
 def display_combined(score: float, emoji: str, ai_reason: str, tb_label: str):
     col1, col2, col3 = st.columns([1, 0.6, 1])
 
@@ -616,21 +665,32 @@ def display_combined(score: float, emoji: str, ai_reason: str, tb_label: str):
 
     # Reason bubble
     with col3:
-        st.markdown('<div class="reason-bubble" style="padding:10px; background:rgba(255,255,255,0.1); border-radius:12px;">', unsafe_allow_html=True)
-        short = ai_reason if len(ai_reason) < 800 else ai_reason[:800] + '...'
-        st.write(short)
-        st.markdown('</div>', unsafe_allow_html=True)
+        content = (
+            ai_reason[:800] + "..."
+            if isinstance(ai_reason, str) and len(ai_reason) > 800
+            else str(ai_reason or "")
+        )
 
+        st.markdown(
+            f"""
+            <div class="reason-bubble" style="
+                padding:10px;
+                background:rgba(255,255,255,0.1);
+                border-radius:12px;
+                white-space:pre-wrap;     /* preserve newlines */
+                line-height:1.5;
+                overflow:auto;            /* add scroll if long */
+                max-height:400px;
+                text-align: left;         /* force left alignment */
+            ">
+                {content}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 # -------------------- Empathy Page --------------------
 
-def empathy_page():
-    components.html("<script>document.body.className='';</script>", height=0)
-
-    st.markdown('<div class="glass">🎭 Empathy Meter</div>', unsafe_allow_html=True)
-    st.markdown('<div class="subtitle">Type or speak — I will analyze and speak out the result with score.</div>', unsafe_allow_html=True)
-
-    st.caption(f"Logged in as: {st.session_state.username}")
-
+def empathy_text_page():
     st.subheader("✍ Text Input")
     text_in = st.text_area("Type how you feel…", height=120)
     if st.button("🔍 Analyze Text"):
@@ -639,12 +699,10 @@ def empathy_page():
             speak(f"You wrote: {text_in}")
             label_tb, icon, score, label_ai, primary_emotion, emoji = analyze_emotion(text_in)
 
-            # dynamic background and display based on tb label + ai hint
             set_dynamic_background(primary_emotion)
             display_combined(score, emoji, label_ai, primary_emotion)
             speak(f"Primary emotion detected: {primary_emotion}.")
 
-            # Save to backend
             try:
                 requests.post(
                     f"{API_URL}/submit_score",
@@ -657,11 +715,10 @@ def empathy_page():
             st.warning("Please enter some text.")
             speak("Please enter text first.")
 
-    st.divider()
-
+def empathy_voice_page():
     st.subheader("🎤 Voice Input")
     if st.button("👂 Start Recording"):
-        with st.spinner("Listening…"):
+        with st.spinner("Listening…"):  
             heard = recognize_speech()
         if not heard:
             st.error("Could not understand speech.")
@@ -671,15 +728,10 @@ def empathy_page():
             speak(f"You said: {heard}")
             label_tb, icon, score, label_ai, primary_emotion, emoji = analyze_emotion(heard or "")
 
-            # dynamic background
             set_dynamic_background(label_tb)
-
-            # combined display
             display_combined(score, icon, label_ai, label_tb)
-
             speak(f"This sounds {label_tb}.")
 
-            # Save to backend
             try:
                 requests.post(
                     f"{API_URL}/submit_score",
@@ -689,9 +741,7 @@ def empathy_page():
             except Exception as e:
                 st.error(f"⚠ Could not save score: {e}")
 
-    st.divider()
-
-    # ---- Email ----
+def empathy_email_page():
     st.subheader("📧 Email Tone Analysis")
     email_text = st.text_area("Paste your email here…", height=150, key="email_text")
     if st.button("🔍 Analyze Email"):
@@ -700,7 +750,6 @@ def empathy_page():
             st.info(result)
             speak(result)
 
-            #  Save Email Analysis to backend
             try:
                 requests.post(
                     f"{API_URL}/submit_email_analysis",
@@ -716,9 +765,23 @@ def empathy_page():
         else:
             st.warning("Please paste an email first.")
 
+
+def empathy_main_page():
+    components.html("<script>document.body.className='';</script>", height=0)
+
+    st.markdown('<div class="glass">🎭 Empathy Meter</div>', unsafe_allow_html=True)
+    st.markdown('<div class="subtitle">Type or speak — I will analyze and speak out the result with score.</div>', unsafe_allow_html=True)
+
+    st.caption(f"Logged in as: {st.session_state.username}")
+
+    empathy_text_page()
+    st.divider()
+    empathy_voice_page()
+    st.divider()
+    empathy_email_page()
     st.divider()
 
-    # Optional: Score History viewer (keeps UI as-is)
+    #Score History viewer (keeps UI as-is)
     with st.expander("📊 View Score History"):
         if st.button("Refresh History"):
             st.experimental_rerun()
@@ -754,8 +817,11 @@ def empathy_page():
 # -------------------- Router --------------------
 if not st.session_state.logged_in:
     if st.session_state.page == "login":
+        _lock_scroll_css()
         login_page()
     else:
+        _lock_scroll_css()
         signup_page()
 else:
-    empathy_page()
+    _unlock_scroll_css()
+    empathy_main_page()
