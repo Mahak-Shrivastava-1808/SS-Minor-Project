@@ -690,7 +690,14 @@ def display_combined(score: float, emoji: str, ai_reason: str, tb_label: str):
         )
 # -------------------- Empathy Page --------------------
 
-def empathy_text_page():
+def empathy_page():
+    components.html("<script>document.body.className='';</script>", height=0)
+
+    st.markdown('<div class="glass">🎭 Empathy Meter</div>', unsafe_allow_html=True)
+    st.markdown('<div class="subtitle">Type or speak — I will analyze and speak out the result with score.</div>', unsafe_allow_html=True)
+
+    st.caption(f"Logged in as: {st.session_state.username}")
+
     st.subheader("✍ Text Input")
     text_in = st.text_area("Type how you feel…", height=120)
     if st.button("🔍 Analyze Text"):
@@ -699,10 +706,12 @@ def empathy_text_page():
             speak(f"You wrote: {text_in}")
             label_tb, icon, score, label_ai, primary_emotion, emoji = analyze_emotion(text_in)
 
+            # dynamic background and display based on tb label + ai hint
             set_dynamic_background(primary_emotion)
             display_combined(score, emoji, label_ai, primary_emotion)
             speak(f"Primary emotion detected: {primary_emotion}.")
 
+            # Save to backend
             try:
                 requests.post(
                     f"{API_URL}/submit_score",
@@ -715,7 +724,8 @@ def empathy_text_page():
             st.warning("Please enter some text.")
             speak("Please enter text first.")
 
-def empathy_voice_page():
+    st.divider()
+
     st.subheader("🎤 Voice Input")
     if st.button("👂 Start Recording"):
         with st.spinner("Listening…"):  
@@ -728,10 +738,15 @@ def empathy_voice_page():
             speak(f"You said: {heard}")
             label_tb, icon, score, label_ai, primary_emotion, emoji = analyze_emotion(heard or "")
 
+            # dynamic background
             set_dynamic_background(label_tb)
+
+            # combined display
             display_combined(score, icon, label_ai, label_tb)
+
             speak(f"This sounds {label_tb}.")
 
+            # Save to backend
             try:
                 requests.post(
                     f"{API_URL}/submit_score",
@@ -741,7 +756,10 @@ def empathy_voice_page():
             except Exception as e:
                 st.error(f"⚠ Could not save score: {e}")
 
-def empathy_email_page():
+    st.divider()
+
+    # ---- Email ----
+    
     st.subheader("📧 Email Tone Analysis")
     email_text = st.text_area("Paste your email here…", height=150, key="email_text")
     if st.button("🔍 Analyze Email"):
@@ -750,6 +768,7 @@ def empathy_email_page():
             st.info(result)
             speak(result)
 
+            #  Save Email Analysis to backend
             try:
                 requests.post(
                     f"{API_URL}/submit_email_analysis",
@@ -765,20 +784,6 @@ def empathy_email_page():
         else:
             st.warning("Please paste an email first.")
 
-
-def empathy_main_page():
-    components.html("<script>document.body.className='';</script>", height=0)
-
-    st.markdown('<div class="glass">🎭 Empathy Meter</div>', unsafe_allow_html=True)
-    st.markdown('<div class="subtitle">Type or speak — I will analyze and speak out the result with score.</div>', unsafe_allow_html=True)
-
-    st.caption(f"Logged in as: {st.session_state.username}")
-
-    empathy_text_page()
-    st.divider()
-    empathy_voice_page()
-    st.divider()
-    empathy_email_page()
     st.divider()
 
     #Score History viewer (keeps UI as-is)
@@ -824,4 +829,4 @@ if not st.session_state.logged_in:
         signup_page()
 else:
     _unlock_scroll_css()
-    empathy_main_page()
+    empathy_page()
